@@ -2,119 +2,45 @@
 
 namespace NW\WebService\References\Operations\Notification;
 
-use Exception;
-
 class TsReturnOperation extends ReferencesOperation
 {
     public const TYPE_NEW    = 1;
     public const TYPE_CHANGE = 2;
 
     /**
-     * @var Contractor
+     * @throws \Exception
      */
-    protected Contractor $client;
-
-    protected $resellerId;
-
-    /**
-     * @var int
-     */
-    protected int $notificationType;
-
-    /**
-     * @throws Exception
-     */
-    public function doOperation(): array
+    public function doOperation(): void
     {
-        return $this->notifcate();
-    }
-
-    /**
-     * @return array
-     * @throws Exception
-     */
-    private function notifcate(): array
-    {
-        try {
-            $data = (array)$this->getRequest('data');
-
-            $data = $this->securityCheck($data);
-
-            $result = [
-                'notificationEmployeeByEmail' => false,
-                'notificationClientByEmail' => false,
-                'notificationClientBySms' => [
-                    'isSent' => false,
-                    'message' => '',
-                ],
-            ];
-
-            $templateData = $this->getTemplate($data);
-
-            if (!$templateData) {
-                $result['notificationClientBySms']['message'] = 'Empty resellerId';
-            }
-
-            $emailFrom = getResellerEmailFrom();
-            $result = $this->notificateEmployee($emailFrom, $templateData, $result);
-
-            $result = $this->notificateClient($data, $emailFrom, $templateData, $result);
-
-            return $result;
-        } catch (Exception $e) {
-            throw new Exception($e->getMessage(), $e->getCode());
-        }
-    }
-
-    /**
-     * @param array $data
-     * @return array
-     */
-    private function securityCheck(array $data): array
-    {
-        //так данные приходят с фронта, ожидать там можно - что угодно. Поэтому лучше защититься от SQL-инъекций и XSS-инъекций
-        foreach ($data as $key => $value) {
-            //защита от SQL-injection
-            //...использование безопасных запросов...$pdo->prepare....или 'mysqli_execute_query' или.....
-
-            //чтобы защититься от XSS-injection
-            $value = htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
-            $data[$key] = strip_tags($value);
-        }
-
-        return $data;
-    }
-
-    /**
-     * @param array $data
-     * @return array
-     * @throws Exception
-     */
-    private function getTemplate(array $data): array
-    {
+        $data = (array)$this->getRequest('data');
         $resellerId = $data['resellerId'];
         $notificationType = (int)$data['notificationType'];
-        $creatorId = (int)$data['creatorId'];
-        $expertId = (int)$data['expertId'];
-        $clientId = (int)$data['clientId'];
+        $result = [
+            'notificationEmployeeByEmail' => false,
+            'notificationClientByEmail'   => false,
+            'notificationClientBySms'     => [
+                'isSent'  => false,
+                'message' => '',
+            ],
+        ];
 
         if (empty((int)$resellerId)) {
-            return [];
+            $result['notificationClientBySms']['message'] = 'Empty resellerId';
+            return $result;
         }
 
         if (empty((int)$notificationType)) {
-            throw new Exception('Empty notificationType', 400);
+            throw new \Exception('Empty notificationType', 400);
         }
 
         $reseller = Seller::getById((int)$resellerId);
         if ($reseller === null) {
-            throw new Exception('Seller not found!', 400);
+            throw new \Exception('Seller not found!', 400);
         }
 
-        $this->client = Contractor::getById($clientId);
-        $client = $this->client;
+        $client = Contractor::getById((int)$data['clientId']);
         if ($client === null || $client->type !== Contractor::TYPE_CUSTOMER || $client->Seller->id !== $resellerId) {
-            throw new Exception('сlient not found!', 400);
+            throw new \Exception('сlient not found!', 400);
         }
 
         $cFullName = $client->getFullName();
@@ -122,14 +48,14 @@ class TsReturnOperation extends ReferencesOperation
             $cFullName = $client->name;
         }
 
-        $cr = Employee::getById($creatorId);
+        $cr = Employee::getById((int)$data['creatorId']);
         if ($cr === null) {
-            throw new Exception('Creator not found!', 400);
+            throw new \Exception('Creator not found!', 400);
         }
 
-        $et = Employee::getById($expertId);
+        $et = Employee::getById((int)$data['expertId']);
         if ($et === null) {
-            throw new Exception('Expert not found!', 400);
+            throw new \Exception('Expert not found!', 400);
         }
 
         $differences = '';
@@ -145,11 +71,11 @@ class TsReturnOperation extends ReferencesOperation
         $templateData = [
             'COMPLAINT_ID'       => (int)$data['complaintId'],
             'COMPLAINT_NUMBER'   => (string)$data['complaintNumber'],
-            'CREATOR_ID'         => $creatorId,
+            'CREATOR_ID'         => (int)$data['creatorId'],
             'CREATOR_NAME'       => $cr->getFullName(),
-            'EXPERT_ID'          => $expertId,
+            'EXPERT_ID'          => (int)$data['expertId'],
             'EXPERT_NAME'        => $et->getFullName(),
-            'CLIENT_ID'          => $clientId,
+            'CLIENT_ID'          => (int)$data['clientId'],
             'CLIENT_NAME'        => $cFullName,
             'CONSUMPTION_ID'     => (int)$data['consumptionId'],
             'CONSUMPTION_NUMBER' => (string)$data['consumptionNumber'],
@@ -161,23 +87,11 @@ class TsReturnOperation extends ReferencesOperation
         // Если хоть одна переменная для шаблона не задана, то не отправляем уведомления
         foreach ($templateData as $key => $tempData) {
             if (empty($tempData)) {
-                throw new Exception("Template Data ({$key}) is empty!", 500);
+                throw new \Exception("Template Data ({$key}) is empty!", 500);
             }
         }
 
-        return $templateData;
-    }
-
-    /**
-     * @param string $emailFrom
-     * @param array $templateData
-     * @param array $result
-     * @return array
-     */
-    private function notificateEmployee(string $emailFrom, array $templateData, array $result): array
-    {
-        $resellerId = $this->resellerId;
-
+        $emailFrom = getResellerEmailFrom($resellerId);
         // Получаем email сотрудников из настроек
         $emails = getEmailsByPermit($resellerId, 'tsGoodsReturn');
         if (!empty($emailFrom) && count($emails) > 0) {
@@ -191,29 +105,12 @@ class TsReturnOperation extends ReferencesOperation
                     ],
                 ], $resellerId, NotificationEvents::CHANGE_RETURN_STATUS);
                 $result['notificationEmployeeByEmail'] = true;
+
             }
         }
 
-        return $result;
-    }
-
-    /**
-     * @param string $emailFrom
-     * @param array $templateData
-     * @param array $result
-     * @return array
-     */
-    private function notificateClient(array $data, string $emailFrom, array $templateData, array $result): array
-    {
-        $notificationType = $this->notificationType;
-        $resellerId = $this->resellerId;
-        $error = '';
-        $differencesTo = $data['differences']['to'] ?? null;
-
         // Шлём клиентское уведомление, только если произошла смена статуса
-        if ($notificationType === self::TYPE_CHANGE && $differencesTo) {
-            $differencesTo = (int) $differencesTo;
-            //@TODO по-хорошему, конечно, надо разбить на 2 функции notificateByEmail и notificateBySms, но чё-то не соображу, как это тут лучше будет сделать...
+        if ($notificationType === self::TYPE_CHANGE && !empty($data['differences']['to'])) {
             if (!empty($emailFrom) && !empty($client->email)) {
                 MessagesClient::sendMessage([
                     0 => [ // MessageTypes::EMAIL
@@ -222,12 +119,12 @@ class TsReturnOperation extends ReferencesOperation
                         'subject'   => __('complaintClientEmailSubject', $templateData, $resellerId),
                         'message'   => __('complaintClientEmailBody', $templateData, $resellerId),
                     ],
-                ], $resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, $differencesTo);
+                ], $resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to']);
                 $result['notificationClientByEmail'] = true;
             }
 
             if (!empty($client->mobile)) {
-                $res = NotificationManager::send($resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, $differencesTo, $templateData, $error);
+                $res = NotificationManager::send($resellerId, $client->id, NotificationEvents::CHANGE_RETURN_STATUS, (int)$data['differences']['to'], $templateData, $error);
                 if ($res) {
                     $result['notificationClientBySms']['isSent'] = true;
                 }
